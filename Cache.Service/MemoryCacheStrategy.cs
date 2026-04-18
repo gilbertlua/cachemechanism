@@ -1,18 +1,92 @@
+using System.Collections.Concurrent;
+
 namespace Cache.Service;
-public class MemoryCacheStrategy : CacheStrategyBase{
-    protected override IEnumerator<KeyValuePair<string, object>> GetEnumerator()
+public class MemoryCacheStrategy : CacheStrategyBase
+{
+    private class CacheEntry
     {
-        Dictionary<string, object> val = new Dictionary<string, object>();
-        return val.GetEnumerator();
+        public object Value { get; set; }
+        public DateTime ExpirationTime { get; set; }
+        public bool IsExpired => DateTime.UtcNow > ExpirationTime;
+    }
+    private readonly ConcurrentDictionary<string, CacheEntry> _store = new();
+    private readonly TimeSpan _defaultExpiration = TimeSpan.FromMinutes(30);
+
+    public override string StrategyName => "In-Memory Storage";
+
+    public override int Count => _store.Count(x => !x.Value.IsExpired);
+
+    public override ICollection<string> Keys => _store
+        .Where(x => !x.Value.IsExpired)
+        .Select(x => x.Key)
+        .ToList();
+
+    public override T GetOrSet<T>(string key, Func<T> data)
+    {
+        if (Contains(key))
+        {
+            return Get<T>(key);
+        }
+        T dataSource = data();
+        Set<T>(key, dataSource);
+        return dataSource;
+
+    }
+    public override void Set<T>(string key, T value, TimeSpan? expiration = null)
+    {
+        var expiry = DateTime.UtcNow.Add(expiration ?? _defaultExpiration);
+        
+        var entry = new CacheEntry
+        {
+            Value = value,
+            ExpirationTime = expiry
+        };
+
+        _store[key] = entry;
+    }
+
+    public override T Get<T>(string key)
+    {
+        if (_store.TryGetValue(key, out var entry))
+        {
+            if (!entry.IsExpired)
+            {
+                return (T)entry.Value;
+            }
+            _store.TryRemove(key, out _);
+        }
+
+        return default;
     }
 
     public override bool Contains(string key)
     {
-       return (GetInternal(key) != null);
+        if (!_store.TryGetValue(key, out var entry)) return false;
+        
+        if (entry.IsExpired)
+        {
+            _store.TryRemove(key, out _);
+            return false;
+        }
+
+        return true;
     }
 
-    private object GetInternal(string key)
+    public override bool Remove(string key)
     {
-        return true;
+        return _store.TryRemove(key, out _);
+    }
+
+    public override void Clear()
+    {
+        _store.Clear();
+    }
+
+    public override IEnumerator<KeyValuePair<string, object>> GetEnumerator()
+    {
+        return _store
+            .Where(x => !x.Value.IsExpired)
+            .Select(x => new KeyValuePair<string, object>(x.Key, x.Value.Value))
+            .GetEnumerator();
     }
 }
