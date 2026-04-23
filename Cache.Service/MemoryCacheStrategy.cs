@@ -3,18 +3,27 @@ using System.Collections.Concurrent;
 namespace Cache.Service;
 public class MemoryCacheStrategy : CacheStrategyBase
 {
-    private class CacheEntry
-    {
-        public object Value { get; set; }
-        public DateTime ExpirationTime { get; set; }
-        public bool IsExpired => DateTime.UtcNow > ExpirationTime;
-    }
-    private readonly ConcurrentDictionary<string, CacheEntry> _store = new();
+    private readonly ConcurrentDictionary<string, CacheEntry<ICacheable>> _store = new();
     private readonly TimeSpan _defaultExpiration = TimeSpan.FromMinutes(30);
 
     public override string StrategyName => "In-Memory Storage";
 
     public override int Count => _store.Count(x => !x.Value.IsExpired);
+
+    // Cache entry
+    private class CacheEntry<T> where T : ICacheable
+    {
+        public T Value { get; set; }
+        public DateTime ExpirationTime { get; set; }
+        
+        public bool IsExpired => DateTime.UtcNow > ExpirationTime;
+        public CacheEntry(T value, DateTime duration)
+        {
+            Value = value;
+            ExpirationTime = duration;
+        }
+    }
+
 
     public override ICollection<string> Keys => _store
         .Where(x => !x.Value.IsExpired)
@@ -36,12 +45,8 @@ public class MemoryCacheStrategy : CacheStrategyBase
     {
         var expiry = DateTime.UtcNow.Add(expiration ?? _defaultExpiration);
         
-        var entry = new CacheEntry
-        {
-            Value = value,
-            ExpirationTime = expiry
-        };
-
+        var entry = new CacheEntry<ICacheable>(value,expiry);
+    
         _store[key] = entry;
     }
 
@@ -65,7 +70,7 @@ public class MemoryCacheStrategy : CacheStrategyBase
         
         if (entry.IsExpired)
         {
-            _store.TryRemove(key, out _);
+            Remove(key);
             return false;
         }
 
